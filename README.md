@@ -28,3 +28,4 @@ netlify dev
 ## Notes
 - Dates are treated as UTC; values are daily snapshots.
 - The on‑page counter reads response headers (`X-RateLimit-*`) from the functions.
+Trigger Netlify deploy Wed 13 Aug 2025 12:46:03 UTC
