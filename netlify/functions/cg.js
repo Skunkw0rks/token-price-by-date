@@ -1,57 +1,80 @@
 // netlify/functions/cg.js
-// A simple GET-only proxy that injects a CoinGecko API key from env vars.
-// Supports both Demo and Pro keys. Do NOT expose your key in the browser.
-// Usage from client: /.netlify/functions/cg?endpoint=/coins/bitcoin/history&date=02-06-2025&localization=false&currency=usd
-// The function constructs: https://api.coingecko.com/api/v3 + endpoint + query and adds the header.
-// If PRO key is present, it will use the Pro API domain instead.
+// Proxy for recent historical price lookups (provider A).
+// Env: CG_DEMO_API_KEY or CG_PRO_API_KEY
+
+const RATE_LIMIT = 20;
+const bucket = new Map(); // key: `${ip}|${YYYY-MM-DD}` -> count
+
+function getClientIP(event) {
+  const h = event.headers || {};
+  return (
+    h["x-nf-client-connection-ip"] ||
+    (h["x-forwarded-for"] || "").split(",")[0].trim() ||
+    h["client-ip"] ||
+    h["x-real-ip"] ||
+    "unknown"
+  );
+}
+function todayKey() {
+  const now = new Date();
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2,"0")}-${String(now.getUTCDate()).padStart(2,"0")}`;
+}
+function checkRateLimit(event) {
+  const ip = getClientIP(event);
+  const key = `${ip}|${todayKey()}`;
+  const count = bucket.get(key) || 0;
+  if (count >= RATE_LIMIT) return { ok: false, ip, count };
+  bucket.set(key, count + 1);
+  return { ok: true, ip, count: count + 1 };
+}
+function rateHeaders(info) {
+  const remaining = Math.max(0, RATE_LIMIT - (info?.count || 0));
+  return { "X-RateLimit-Limit": String(RATE_LIMIT), "X-RateLimit-Remaining": String(remaining) };
+}
 
 export async function handler(event, _context) {
   try {
     if (event.httpMethod !== "GET") {
-      return { statusCode: 405, body: "Method Not Allowed" };
+      const rl = { count: 0 };
+      return { statusCode: 405, headers: rateHeaders(rl), body: "Method Not Allowed" };
     }
+
+    const rl = checkRateLimit(event);
+    if (!rl.ok) return { statusCode: 429, headers: rateHeaders(rl), body: JSON.stringify({ error: "Daily limit reached (20 per IP). Try again tomorrow." }) };
 
     const params = new URLSearchParams(event.queryStringParameters || {});
-    const endpoint = params.get("endpoint"); // must start with "/"
+    const endpoint = params.get("endpoint");
     if (!endpoint || !endpoint.startsWith("/")) {
-      return { statusCode: 400, body: "Missing or invalid 'endpoint' parameter" };
+      return { statusCode: 400, headers: rateHeaders(rl), body: "Missing or invalid 'endpoint' parameter" };
     }
-
-    // pull and remove internal params
     params.delete("endpoint");
-    const currency = params.get("currency"); // optional, pass-through
-    // Decide which base URL and header to use
+
     const PRO_KEY = process.env.CG_PRO_API_KEY;
     const DEMO_KEY = process.env.CG_DEMO_API_KEY;
 
     let base = "https://api.coingecko.com/api/v3";
-    let authHeaderName = "x-cg-demo-api-key";
-    let authKey = DEMO_KEY || "";
+    let headerName = "x-cg-demo-api-key";
+    let key = DEMO_KEY || "";
 
     if (PRO_KEY) {
       base = "https://pro-api.coingecko.com/api/v3";
-      authHeaderName = "x-cg-pro-api-key";
-      authKey = PRO_KEY;
+      headerName = "x-cg-pro-api-key";
+      key = PRO_KEY;
     } else if (!DEMO_KEY) {
-      return { statusCode: 500, body: "Server missing CoinGecko API key (CG_DEMO_API_KEY or CG_PRO_API_KEY)" };
+      return { statusCode: 500, headers: rateHeaders(rl), body: "Server missing API key (CG_DEMO_API_KEY or CG_PRO_API_KEY)" };
     }
 
     const url = `${base}${endpoint}?${params.toString()}`;
-
-    const res = await fetch(url, {
-      headers: { [authHeaderName]: authKey },
-    });
-
+    const res = await fetch(url, { headers: { [headerName]: key } });
     const text = await res.text();
+
     return {
       statusCode: res.status,
-      headers: {
-        "Content-Type": res.headers.get("content-type") || "application/json",
-        "Cache-Control": "public, max-age=60",
-      },
+      headers: { "Content-Type": res.headers.get("content-type") || "application/json", "Cache-Control": "public, max-age=60", ...rateHeaders(rl) },
       body: text,
     };
   } catch (err) {
-    return { statusCode: 500, body: `Proxy error: ${err.message}` };
+    const rl = { count: 0 };
+    return { statusCode: 500, headers: rateHeaders(rl), body: `Proxy error: ${err.message}` };
   }
 }
