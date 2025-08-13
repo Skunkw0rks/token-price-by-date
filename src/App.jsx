@@ -244,10 +244,10 @@ export default function App() {
                   <div className="text-gray-500">Market Cap ({result.currency.toUpperCase()})</div>
                   <div className="font-medium">{result.mcap != null ? formatNumber(result.mcap) : '—'}</div>
                 </div>
-               // <div className="rounded-xl bg-gray-50 p-4">
-               //   <div className="text-gray-500">Source</div>
-               //   <div className="font-medium">{result.source || '—'}</div>
-               // </div> 
+		  {/* <div className="rounded-xl bg-gray-50 p-4">
+                  <div className="text-gray-500">Source</div>
+                  <div className="font-medium">{result.source || '—'}</div>
+                </div> */} 
                 <div className="rounded-xl bg-gray-50 p-4 sm:col-span-3">
                   <div className="text-gray-500">24h Volume ({result.currency.toUpperCase()})</div>
                   <div className="font-medium">{result.vol != null ? formatNumber(result.vol) : '—'}</div>
