@@ -9,37 +9,27 @@ export default function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState(null)
+  const [rateInfo, setRateInfo] = useState({ limit: 20, remaining: null })
 
   const controllerRef = useRef(null)
-
   const debouncedQuery = useDebounce(query, 300)
 
   useEffect(() => {
-    if (!debouncedQuery) {
-      setSuggestions([])
-      return
-    }
+    if (!debouncedQuery) { setSuggestions([]); return }
     controllerRef.current?.abort()
     const controller = new AbortController()
     controllerRef.current = controller
-
     ;(async () => {
       try {
-        const res = await fetch(
-          `https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(debouncedQuery)}`,
-          { signal: controller.signal }
-        )
+        const res = await fetch(`https://api.coingecko.com/api/v3/search?query=${encodeURIComponent(debouncedQuery)}`, { signal: controller.signal })
         if (!res.ok) throw new Error(`Search failed: ${res.status}`)
         const data = await res.json()
         const coins = (data?.coins ?? []).slice(0, 8)
         setSuggestions(coins)
       } catch (err) {
-        if (err?.name !== 'AbortError') {
-          console.error(err)
-        }
+        if (err?.name !== 'AbortError') console.error(err)
       }
     })()
-
     return () => controller.abort()
   }, [debouncedQuery])
 
@@ -51,54 +41,75 @@ export default function App() {
     setError('')
   }
 
+  function daysBetween(aISO, bISO) {
+    const a = new Date(aISO + 'T00:00:00Z')
+    const b = new Date(bISO + 'T00:00:00Z')
+    const ms = Math.abs(b - a)
+    return Math.floor(ms / (1000*60*60*24))
+  }
   function ddmmyyyyFromISO(iso) {
     try {
       const [y, m, d] = iso.split('-')
       if (!y || !m || !d) return ''
       return `${d}-${m}-${y}`
-    } catch {
-      return ''
-    }
+    } catch { return '' }
   }
 
   async function fetchPrice() {
-    setError('')
-    setResult(null)
-    if (!selectedCoin?.id) {
-      setError('Please select a token from the suggestions.')
-      return
-    }
-    if (!date) {
-      setError('Please choose a date.')
-      return
-    }
+    setError(''); setResult(null)
+    if (!selectedCoin?.id) { setError('Please select a token from the suggestions.'); return }
+    if (!date) { setError('Please choose a date.'); return }
 
-    const dateParam = ddmmyyyyFromISO(date)
+    const todayISO = new Date().toISOString().slice(0,10)
+    const ageDays = daysBetween(date, todayISO)
     setLoading(true)
     try {
-      const endpoint = `/coins/${encodeURIComponent(selectedCoin.id)}/history`;
-      const qs = new URLSearchParams({ date: dateParam, localization: 'false' });
-      const res = await fetch(`/.netlify/functions/cg?endpoint=${encodeURIComponent(endpoint)}&${qs.toString()}`)
-      if (!res.ok) throw new Error(`Lookup failed: ${res.status}`)
-      const data = await res.json()
-      const price = data?.market_data?.current_price?.[currency]
-      const mcap = data?.market_data?.market_cap?.[currency]
-      const vol = data?.market_data?.total_volume?.[currency]
-
-      if (price == null) {
-        throw new Error('Price not available for that token/date/currency. Try another date or currency.')
+      if (ageDays <= 365) {
+        const dateParam = ddmmyyyyFromISO(date)
+        const endpoint = `/coins/${encodeURIComponent(selectedCoin.id)}/history`
+        const qs = new URLSearchParams({ date: dateParam, localization: 'false' })
+        const res = await fetch(`/.netlify/functions/cg?endpoint=${encodeURIComponent(endpoint)}&${qs.toString()}`)
+        const rl = readRateHeaders(res); setRateInfo(rl)
+        if (!res.ok) throw new Error(`Price lookup failed: ${res.status}`)
+        const data = await res.json()
+        const price = data?.market_data?.current_price?.[currency]
+        const mcap = data?.market_data?.market_cap?.[currency]
+        const vol = data?.market_data?.total_volume?.[currency]
+        if (price == null) throw new Error('Price not available for that token/date/currency.')
+        setResult({
+          price,
+          mcap: mcap ?? null,
+          vol: vol ?? null,
+          image: data?.image?.small ?? selectedCoin?.thumb ?? null,
+          name: data?.name ?? selectedCoin?.name,
+          symbol: selectedCoin?.symbol?.toUpperCase?.() ?? '',
+          date,
+          currency,
+          source: 'Recent (provider A)',
+        })
+      } else {
+        const symbol = (selectedCoin?.symbol || '').toUpperCase()
+        if (!symbol) throw new Error('Missing token symbol for historical lookup.')
+        const qs = new URLSearchParams({ symbol, currency: currency.toUpperCase(), date })
+        const res = await fetch(`/.netlify/functions/cc?${qs.toString()}`)
+        const rl = readRateHeaders(res); setRateInfo(rl)
+        if (!res.ok) {
+          const t = await res.text()
+          throw new Error(`Historical lookup failed: ${res.status} ${t}`)
+        }
+        const data = await res.json()
+        setResult({
+          price: data.price,
+          mcap: null,
+          vol: data.volume ?? null,
+          image: selectedCoin?.thumb ?? null,
+          name: selectedCoin?.name,
+          symbol,
+          date,
+          currency,
+          source: 'Archive (provider B)',
+        })
       }
-
-      setResult({
-        price,
-        mcap: mcap ?? null,
-        vol: vol ?? null,
-        image: data?.image?.small ?? selectedCoin?.thumb ?? null,
-        name: data?.name ?? selectedCoin?.name,
-        symbol: selectedCoin?.symbol?.toUpperCase?.() ?? '',
-        date: date,
-        currency,
-      })
     } catch (err) {
       console.error(err)
       setError(err?.message || 'Something went wrong fetching the price.')
@@ -106,17 +117,6 @@ export default function App() {
       setLoading(false)
     }
   }
-
-  const quickPicks = useMemo(
-    () => [
-      { id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC' },
-      { id: 'ethereum', name: 'Ethereum', symbol: 'ETH' },
-      { id: 'sui', name: 'Sui', symbol: 'SUI' },
-      { id: 'usd-coin', name: 'USD Coin', symbol: 'USDC' },
-      // If you know WAL's CoinGecko id, add here, e.g. { id: 'walrus', name: 'Walrus', symbol: 'WAL' },
-    ],
-    []
-  )
 
   function pickQuick(coin) {
     setSelectedCoin(coin)
@@ -126,13 +126,20 @@ export default function App() {
     setError('')
   }
 
+  const quickPicks = useMemo(() => [
+    { id: 'bitcoin', name: 'Bitcoin', symbol: 'BTC' },
+    { id: 'ethereum', name: 'Ethereum', symbol: 'ETH' },
+    { id: 'sui', name: 'Sui', symbol: 'SUI' },
+    { id: 'usd-coin', name: 'USD Coin', symbol: 'USDC' },
+  ], [])
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900">
       <div className="max-w-3xl mx-auto px-4 py-10">
         <header className="mb-8">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Token price on a specific date</h1>
           <p className="text-sm text-gray-600 mt-2">
-            Search for a token, pick a date, and get the historical price using the CoinGecko API. No API key needed for basic use (rate limits apply).
+            Search for a token, pick a date, and get the historical price. The app selects the best data source automatically based on the date.
           </p>
         </header>
 
@@ -143,21 +150,14 @@ export default function App() {
               <input
                 type="text"
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value)
-                  setSelectedCoin(null)
-                }}
+                onChange={(e) => { setQuery(e.target.value); setSelectedCoin(null) }}
                 placeholder="Try 'wal', 'sui', 'bitcoin'…"
                 className="w-full rounded-2xl border border-gray-300 bg-white px-4 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
               {suggestions.length > 0 && (
                 <div className="absolute z-10 mt-1 w-full rounded-2xl border border-gray-200 bg-white shadow-lg max-h-72 overflow-auto">
                   {suggestions.map((coin) => (
-                    <button
-                      key={coin.id}
-                      onClick={() => pickCoin(coin)}
-                      className="w-full text-left px-4 py-2 hover:bg-gray-50"
-                    >
+                    <button key={coin.id} onClick={() => pickCoin(coin)} className="w-full text-left px-4 py-2 hover:bg-gray-50">
                       <div className="flex items-center gap-3">
                         {coin.thumb ? <img src={coin.thumb} alt="" className="w-5 h-5 rounded" /> : <div className="w-5 h-5 rounded bg-gray-200" />}
                         <div>
@@ -190,13 +190,18 @@ export default function App() {
               className="rounded-2xl border border-gray-300 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               {'usd,eur,gbp,aed,cad,aud,sgd,jpy,krw,inr'.split(',').map((c) => (
-                <option key={c} value={c}>
-                  {c.toUpperCase()}
-                </option>
+                <option key={c} value={c}>{c.toUpperCase()}</option>
               ))}
             </select>
 
             <div className="flex-1" />
+            <div className="text-xs text-gray-500">
+              {rateInfo.remaining != null && rateInfo.remaining >= 0 ? (
+                <span>Requests today: {rateInfo.limit - rateInfo.remaining}/{rateInfo.limit} used · {rateInfo.remaining} left</span>
+              ) : (
+                <span>Daily limit: {rateInfo.limit}</span>
+              )}
+            </div>
 
             <button
               onClick={fetchPrice}
@@ -210,11 +215,7 @@ export default function App() {
           <div className="flex flex-wrap gap-2 pt-1">
             <span className="text-xs text-gray-500">Quick picks:</span>
             {quickPicks.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => pickQuick(c)}
-                className="rounded-full border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
-              >
+              <button key={c.id} onClick={() => pickQuick(c)} className="rounded-full border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100">
                 {c.name}
               </button>
             ))}
@@ -233,9 +234,7 @@ export default function App() {
               <div className="grid sm:grid-cols-3 gap-4 text-sm">
                 <div className="rounded-xl bg-gray-50 p-4">
                   <div className="text-gray-500">Date</div>
-                  <div className="font-medium">
-                    {new Date(result.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' })}
-                  </div>
+                  <div className="font-medium">{new Date(result.date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: '2-digit' })}</div>
                 </div>
                 <div className="rounded-xl bg-gray-50 p-4">
                   <div className="text-gray-500">Price ({result.currency.toUpperCase()})</div>
@@ -245,6 +244,10 @@ export default function App() {
                   <div className="text-gray-500">Market Cap ({result.currency.toUpperCase()})</div>
                   <div className="font-medium">{result.mcap != null ? formatNumber(result.mcap) : '—'}</div>
                 </div>
+		  {/* <div className="rounded-xl bg-gray-50 p-4">
+                  <div className="text-gray-500">Source</div>
+                  <div className="font-medium">{result.source || '—'}</div>
+                </div> */} 
                 <div className="rounded-xl bg-gray-50 p-4 sm:col-span-3">
                   <div className="text-gray-500">24h Volume ({result.currency.toUpperCase()})</div>
                   <div className="font-medium">{result.vol != null ? formatNumber(result.vol) : '—'}</div>
@@ -254,7 +257,7 @@ export default function App() {
           )}
 
           <footer className="pt-6 text-xs text-gray-500">
-            Data via CoinGecko public API. Prices reflect CoinGecko's daily snapshot for the chosen date.
+            Data sources are selected automatically based on date; prices are daily snapshots in UTC.
           </footer>
         </div>
       </div>
@@ -269,9 +272,7 @@ function formatNumber(n) {
     if (n >= 1e3) return `${(n / 1e3).toFixed(2)}K`
     if (n < 1 && n > 0) return new Intl.NumberFormat(undefined, { maximumFractionDigits: 8 }).format(n)
     return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(n)
-  } catch {
-    return String(n)
-  }
+  } catch { return String(n) }
 }
 
 function useDebounce(value, delay = 300) {
@@ -281,4 +282,12 @@ function useDebounce(value, delay = 300) {
     return () => clearTimeout(t)
   }, [value, delay])
   return debounced
+}
+
+function readRateHeaders(res) {
+  try {
+    const limit = parseInt(res.headers.get('x-ratelimit-limit') || '20', 10)
+    const remaining = parseInt(res.headers.get('x-ratelimit-remaining') || '-1', 10)
+    return { limit, remaining }
+  } catch { return { limit: 20, remaining: -1 } }
 }
