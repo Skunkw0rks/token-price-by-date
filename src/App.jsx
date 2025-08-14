@@ -139,7 +139,7 @@ export default function App() {
         <header className="mb-8">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Token price on a specific date</h1>
           <p className="text-sm text-gray-600 mt-2">
-            Search for a token, pick a date, and get the historical price. The app selects the best data source automatically based on the date.
+            Search for a token, pick a date, and get the historical price.
           </p>
         </header>
 
@@ -257,13 +257,15 @@ export default function App() {
           )}
 
           <footer className="pt-6 text-xs text-gray-500">
-            Data sources are selected automatically based on date; prices are daily snapshots in UTC.
+            Prices are daily snapshopts in UTC. Tooling by ProdS3c, All rights reserved.  
           </footer>
         </div>
       </div>
     </div>
   )
 }
+
+{/* Thanks for using me any comments or suggestions email helloprods3c at gmail.com */}
 
 function formatNumber(n) {
   try {
