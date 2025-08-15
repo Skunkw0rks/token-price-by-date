@@ -257,7 +257,7 @@ export default function App() {
           )}
 
           <footer className="pt-6 text-xs text-gray-500">
-            Prices are daily snapshopts in UTC. Tooling by ProdS3c, All rights reserved.  
+            Prices are daily snapshopts in UTC. 2025 ProdS3c, All rights reserved.  
           </footer>
         </div>
       </div>
